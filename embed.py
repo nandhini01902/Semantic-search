@@ -1,137 +1,37 @@
-import numpy as np
-from sentence_transformers import SentenceTransformer
-import json
 from pathlib import Path
 
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
-BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "outputs"
-EMBEDDINGS_FILE = OUTPUT_DIR / "medical_embeddings.npy"
-QUERY_EMBEDDINGS_FILE = OUTPUT_DIR / "query_embeddings.npy"
-
-MODEL_NAMES = {
-    "minilm": "sentence-transformers/all-MiniLM-L6-v2",
-    "mpnet": "sentence-transformers/all-mpnet-base-v2",
-    "clinical": None,
-}
+from semantic_pipeline import MODEL_CONFIGS, OUTPUT_DIR, encode_texts, load_queries, load_records
 
 
-def load_embedding_model(model_name):
-    if model_name not in MODEL_NAMES:
-        raise ValueError(f"Unknown model name: {model_name}")
+def main() -> None:
+    records = load_records()
+    queries = load_queries()
 
-    model_id = MODEL_NAMES[model_name]
+    output_dir = OUTPUT_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    if model_id is None:
-        raise ValueError(
-            "Set Another model ID."
-        )
+    for cfg in MODEL_CONFIGS:
+        model = SentenceTransformer(cfg["model_id"])
+        record_texts = [record["note_text"] for record in records]
+        query_texts = [query["query_text"] for query in queries]
 
-    model = SentenceTransformer(model_id)
+        record_embeddings = encode_texts(model, record_texts, normalize=True)
+        query_embeddings = encode_texts(model, query_texts, normalize=True)
 
-    print("Model:", model_id)
-    print("Embedding dimension:", model.get_embedding_dimension())
+        np.save(output_dir / f"medical_embeddings_{cfg['name']}.npy", record_embeddings)
+        np.save(output_dir / f"query_embeddings_{cfg['name']}.npy", query_embeddings)
+        print(f"Saved {cfg['name']} embeddings with shape {record_embeddings.shape}")
 
-    return model
-
-
-def encode_texts(model, texts, normalize=False):
-    embeddings = model.encode(
-        texts,
-        convert_to_numpy=True,
-        normalize_embeddings=normalize,
-        show_progress_bar=True,
-    )
-
-    return np.asarray(embeddings, dtype=np.float32)
+    default_model = MODEL_CONFIGS[0]["name"]
+    default_records = np.load(output_dir / f"medical_embeddings_{default_model}.npy")
+    default_queries = np.load(output_dir / f"query_embeddings_{default_model}.npy")
+    np.save(output_dir / "medical_embeddings.npy", default_records)
+    np.save(output_dir / "query_embeddings.npy", default_queries)
+    print(f"Created compatibility files for {default_model} at medical_embeddings.npy and query_embeddings.npy")
 
 
 if __name__ == "__main__":
-    model = load_embedding_model("minilm")
-
-    data_path = (
-        Path(__file__).resolve().parent / "data" / "medical_records 1.json")
-
-    with data_path.open("r", encoding="utf-8") as file:
-        records = json.load(file)
-
-    record_texts = []
-    skipped_record_ids = []
-    for index, record in enumerate(records):
-        if not isinstance(record, dict):
-            raise TypeError(
-                f"Record {index} must be an object, got {type(record).__name__}."
-            )
-
-        note_text = record.get("note_text")
-        if not isinstance(note_text, str) or not note_text.strip():
-            record_id = record.get("record_id", f"index {index}")
-            skipped_record_ids.append(record_id)
-            continue
-
-        record_texts.append(note_text.strip())
-
-    if not record_texts:
-        raise ValueError("No valid medical records with non-empty 'note_text' were found.")
-
-    if skipped_record_ids:
-        print(
-            "\nSkipping records with missing or empty 'note_text': "
-            + ", ".join(skipped_record_ids)
-        )
-
-    print("Total medical records:", len(record_texts))
-
-    record_embeddings = encode_texts(
-        model,
-        record_texts,
-        normalize=True
-    )
-
-    print("Embedding matrix shape:", record_embeddings.shape)
-
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    np.save(EMBEDDINGS_FILE, record_embeddings)
-    print("Medical embeddings saved to:", EMBEDDINGS_FILE)
-
-    queries_path = Path(__file__).resolve().parent / "data" / "queries 1.json"
-    with queries_path.open("r", encoding="utf-8") as file:
-        queries = json.load(file)
-
-    query_texts = []
-    skipped_query_ids = []
-
-    for index, query in enumerate(queries):
-        if not isinstance(query, dict):
-            raise TypeError(
-                f"Query at index {index} must be an object."
-            )
-
-        query_text = query.get("query_text")
-
-        if not isinstance(query_text, str) or not query_text.strip():
-            query_id = query.get("query_id", f"index {index}")
-            skipped_query_ids.append(query_id)
-            continue
-
-        query_texts.append(query_text.strip())
-
-    if skipped_query_ids:
-        print(
-            "\nSkipping queries with missing or empty 'query_text': "
-            + ", ".join(skipped_query_ids)
-        )
-
-    print("Total valid queries:", len(query_texts))
-
-    query_embeddings = encode_texts(
-        model,
-        query_texts,
-        normalize=True
-    )
-
-    print("Query embeddings shape:", query_embeddings.shape)
-
-    np.save(QUERY_EMBEDDINGS_FILE, query_embeddings)
-    print("Query embeddings saved to:", QUERY_EMBEDDINGS_FILE)
-    
+    main()
